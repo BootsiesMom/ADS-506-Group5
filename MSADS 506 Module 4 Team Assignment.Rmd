@@ -1,0 +1,205 @@
+---
+title: "MSADS 506 Module 4 Team Assignment"
+author: "Tommy Barron"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load packages
+library(readxl)
+library(fpp3)
+library(dplyr)
+library(tsibble)
+library(lubridate)
+library(tidyverse)
+```
+
+```{r}
+# Load data
+df <- read_xlsx("SDGE-ELEC-2022to2025.xlsx")
+df
+```
+
+```{r}
+# This shows the total electricity usage by class
+monthly_by_class <- df %>%
+  group_by(CustomerClass, Year, Month) %>%
+  summarise(TotalUsage = sum(TotalkWh), .groups = "drop") %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+class_ts <- monthly_by_class %>%
+  as_tsibble(key = CustomerClass, index = Date)
+
+autoplot(class_ts, TotalUsage) +
+  labs(title = "Total Electricity Usage by Class Over Time",
+       x = "Date", y = "kWh")
+```
+
+```{r}
+# Since I and A classes are 0, the C and R classes are combined and graphed here
+cr_data <- df %>%
+  filter(CustomerClass %in% c("C", "R")) %>%
+  mutate(ClassGroup = "CR") %>%
+  group_by(ClassGroup, Year, Month) %>%
+  summarise(TotalUsage = sum(TotalkWh), .groups = "drop") %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+cr_ts <- cr_data %>%
+  as_tsibble(key = ClassGroup, index = Date)
+
+autoplot(cr_ts, TotalUsage) +
+  labs(title = "Class C & R Combined Total Usage Overtime",
+       x = "Date", y = "kWh")
+```
+
+```{r}
+# This uses the AveragekWh column instead of the TotalkWh column to show how much electricity usage is used per residence or commercial unit.
+monthly_by_class_avg <- df %>%
+  group_by(CustomerClass, Year, Month) %>%
+  summarise(AverageUsage = mean(AveragekWh), .groups = "drop") %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+class_ts_avg <- monthly_by_class_avg %>%
+  as_tsibble(key = CustomerClass, index = Date)
+
+autoplot(class_ts_avg, AverageUsage) +
+  labs(title = "Average Electricity Usage by Class Over Time",
+       x = "Date", y = "kWh")
+```
+
+```{r}
+# This combined the average kWh usage from class C and R
+cr_data_avg <- df %>%
+  filter(CustomerClass %in% c("C", "R")) %>%
+  mutate(ClassGroup = "CR") %>%
+  group_by(ClassGroup, Year, Month) %>%
+  summarise(AverageUsage = mean(AveragekWh), .groups = "drop") %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+cr_ts_avg <- cr_data_avg %>%
+  as_tsibble(key = ClassGroup, index = Date)
+
+autoplot(cr_ts_avg, AverageUsage) +
+  labs(title = "Class C & R Combined Average Usage Overtime",
+       x = "Date", y = "kWh")
+```
+
+```{r}
+# df_filtered is a dataframe that removes all points that have 0 in the TotalkWh column
+df_filtered <- df |>
+  filter(TotalkWh != 0)
+```
+
+```{r}
+# Like previously, this graph displays the electricity usage for TotalkWh with 0's removed. As expected, nothing changed.
+monthly_by_class_filtered <- df_filtered %>%
+  group_by(CustomerClass, Year, Month) %>%
+  summarise(TotalUsage = sum(TotalkWh), .groups = "drop") %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+class_ts_filtered <- monthly_by_class_filtered %>%
+  as_tsibble(key = CustomerClass, index = Date)
+
+autoplot(class_ts_filtered, TotalUsage) +
+  labs(title = "Total Filtered (0's removed) Electricity Usage by Class Over Time",
+       x = "Date", y = "kWh")
+```
+
+```{r}
+# This graph shows the average electricity usage with 0's removed. As you can see, the general usage is higher since the zero values are skewing the data.
+monthly_by_class_avg_filtered <- df_filtered %>%
+  group_by(CustomerClass, Year, Month) %>%
+  summarise(AverageUsage = mean(AveragekWh), .groups = "drop") %>%
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+class_ts_avg_filtered <- monthly_by_class_avg_filtered %>%
+  as_tsibble(key = CustomerClass, index = Date)
+
+autoplot(class_ts_avg_filtered, AverageUsage) +
+  labs(title = "Average Filtered (0's removed) Electricity Usage by Class Over Time",
+       x = "Date", y = "kWh")
+```
+
+```{r}
+ggplot(df_filtered, aes(x = CustomerClass, y = TotalkWh)) +
+  geom_boxplot() +
+  labs(title = "TotalkWh Outliers by Customer Class")
+```
+
+```{r}
+ggplot(df_filtered, aes(x = CustomerClass, y = AveragekWh)) +
+  geom_boxplot() +
+  labs(title = "AveragekWh Outliers by Customer Class")
+```
+
+```{r}
+class_stats_filtered <- df_filtered |>
+  group_by(CustomerClass) |>
+  summarise(
+    Mean_kWh = mean(AveragekWh, na.rm = TRUE),
+    Median_kWh = median(AveragekWh, na.rm = TRUE)
+  )
+
+class_stats_filtered
+```
+
+```{r}
+cr_df <- df |>
+  filter(CustomerClass %in% c("C", "R"))
+
+cr_df
+```
+
+```{r}
+# This outputs a tibble that shows all the rows in which a value is deemed an outlier. The calculation is done after all the Zero values are removed as to not skew the data.
+outliers_cr <- df_filtered |>
+  group_by(CustomerClass) |>
+  mutate(
+    Q1 = quantile(TotalkWh, 0.25, na.rm = TRUE),
+    Q3 = quantile(TotalkWh, 0.75, na.rm = TRUE),
+    IQR = Q3 - Q1,
+    Lower = Q1 - 1.5 * IQR,
+    Upper = Q3 + 1.5 * IQR,
+    Outlier = TotalkWh < Lower | TotalkWh > Upper
+  ) |>
+  filter(Outlier == TRUE) |>
+  arrange(CustomerClass, TotalkWh)
+
+outliers_cr
+```
+
+```{r}
+# This section is intended to find smoothing, differencing, and transformation needs of the data.
+library(lubridate)
+
+df_filtered_temp <- df_filtered |>
+  mutate(ClassGroup = ifelse(CustomerClass %in% c("C", "R"), "C+R", CustomerClass))
+
+df_filtered_temp <- df_filtered_temp |>
+  group_by(ClassGroup, Year, Month) |>
+  summarise(TotalUsage = sum(TotalkWh, na.rm = TRUE), .groups = "drop")
+
+df_filtered_temp <- df_filtered_temp |>
+  mutate(Date = as.Date(paste(Year, Month, "01", sep = "-")))
+
+temp_testing <- df_filtered_temp |>
+  select(Date, TotalUsage) |>
+  as_tsibble(index = Date) |>
+  tsibble::fill_gaps()
+
+temp_testing_fit <- temp_testing |>
+  model(
+    auto_arima = ARIMA(TotalUsage)
+  )
+
+temp_testing_fit |>
+  select(auto_arima) |>
+  gg_tsresiduals(type = "innovation")
+```
