@@ -1,0 +1,373 @@
+---
+title: "MSADS 506 Final Project Modeling"
+author: "Tommy Barron"
+date: "`r Sys.Date()`"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+# Load packages
+library(readxl)
+library(fpp3)
+library(dplyr)
+library(tsibble)
+library(lubridate)
+library(tidyverse)
+library(gt)
+```
+
+```{r}
+# Load data
+df <- read_xlsx("SDGE-ELEC-2022to2025.xlsx")
+head(df)
+```
+
+## Data Preparation
+
+### Region Assignment
+
+```{r}
+# This section assigns the region according to the county of San Diego and the United States Postal Service
+df$region <- recode(df$ZipCode,
+                    "92007" = "North",
+                    "92008" = "North",
+                    "92009" = "North",
+                    "92010" = "North",
+                    "92011" = "North",
+                    "92014" = "North",
+                    "92024" = "North",
+                    "92054" = "North",
+                    "92055" = "North",
+                    "92056" = "North",
+                    "92057" = "North",
+                    "92058" = "North",
+                    "92067" = "North",
+                    "92075" = "North",
+                    "92081" = "North",
+                    "92083" = "North",
+                    "92084" = "North",
+                    "92091" = "North",
+                    "92672" = "North",
+                    "92003" = "North",
+                    "92004" = "North",
+                    "92025" = "North",
+                    "92026" = "North",
+                    "92027" = "North",
+                    "92028" = "North",
+                    "92029" = "North",
+                    "92036" = "North",
+                    "92059" = "North",
+                    "92060" = "North",
+                    "92061" = "North",
+                    "92064" = "North",
+                    "92065" = "North",
+                    "92066" = "North",
+                    "92069" = "North",
+                    "92070" = "North",
+                    "92078" = "North",
+                    "92082" = "North",
+                    "92086" = "North",
+                    "92096" = "North",
+                    "92127" = "North",
+                    "92128" = "North",
+                    "92129" = "North",
+                    "92259" = "North",
+                    "92536" = "North",
+                    "92037" = "North",
+                    "92093" = "North",
+                    "92106" = "North",
+                    "92107" = "North",
+                    "92108" = "North",
+                    "92109" = "North",
+                    "92110" = "North",
+                    "92111" = "North",
+                    "92117" = "North",
+                    "92119" = "North",
+                    "92120" = "North",
+                    "92121" = "North",
+                    "92122" = "North",
+                    "92123" = "North",
+                    "92124" = "North",
+                    "92126" = "North",
+                    "92130" = "North",
+                    "92131" = "North",
+                    "92140" = "North",
+                    "92145" = "North",
+                    "92161" = "North",
+                    "91901" = "East",
+                    "91905" = "East",
+                    "91906" = "East",
+                    "91916" = "East",
+                    "91917" = "East",
+                    "91931" = "East",
+                    "91934" = "East",
+                    "91935" = "East",
+                    "91941" = "East",
+                    "91942" = "East",
+                    "91945" = "East",
+                    "91948" = "East",
+                    "91962" = "East",
+                    "91963" = "East",
+                    "91977" = "East",
+                    "91978" = "East",
+                    "91980" = "East",
+                    "92019" = "East",
+                    "92020" = "East",
+                    "92021" = "East",
+                    "92040" = "East",
+                    "92071" = "East",
+                    "92101" = "Central",
+                    "92102" = "Central",
+                    "92103" = "Central",
+                    "92104" = "Central",
+                    "92015" = "Central",
+                    "92113" = "Central",
+                    "92114" = "Central",
+                    "92115" = "Central",
+                    "92116" = "Central",
+                    "92134" = "Central",
+                    "92136" = "Central",
+                    "92139" = "Central",
+                    "92182" = "Central",
+                    "91902" = "South",
+                    "91910" = "South",
+                    "91911" = "South",
+                    "91913" = "South",
+                    "91914" = "South",
+                    "91915" = "South",
+                    "91932" = "South",
+                    "91950" = "South",
+                    "92118" = "South",
+                    "92135" = "South",
+                    "92154" = "South",
+                    "92155" = "South",
+                    "92173" = "South",
+                    "91912" = "South",
+                    "92049" = "North",
+                    "92068" = "North",
+                    "92072" = "North",
+                    "92079" = "North",
+                    "92085" = "North",
+                    "92092" = "North",
+                    "92105" = "Central",
+                    "92112" = "Central",
+                    "92132" = "Central",
+                    "92152" = "Central",
+                    "92158" = "Central",
+                    "92179" = "South",
+                    "92199" = "Central")
+```
+
+```{r}
+df[is.na(df$region), ]
+```
+
+```{r}
+unique(df$ZipCode[is.na(df$region)])
+```
+
+```{r}
+# Removed ZipCodes:
+# 92045 - No where on the map
+# 92624 - In Orange County
+# 92625 - In Orange County
+# 92629 - In Orange County
+# 92649 - In Orange County
+# 92651 - In Orange County
+# 92653 - In Orange County
+# 92654 - In Orange County
+# 92656 - In Orange County
+# 92673 - In Orange County
+# 92674 - In Orange County
+# 92675 - In Orange County
+# 92676 - In Orange County
+# 92677 - In Orange County
+# 92679 - In Orange County
+# 92688 - In Orange County
+# 92690 - In Orange County
+# 92691 - In Orange County
+# 92692 - In Orange County
+# 92693 - In Orange County
+# 92694 - In Orange County
+
+remove_zips <- c("92045", "92624", "92625", "92629", "92649", "92651", "92653", "92654", "92656", "92673", "92674", "92675", "92676", "92677", "92679", "92688", "92690", "92691", "92692", "92693", "92694")
+
+df_clean <- df |>
+  filter(!ZipCode %in% remove_zips)
+```
+
+```{r}
+# Check if there are any missing ZipCodes with no assigned region
+unique(df_clean$ZipCode[is.na(df_clean$region)])
+```
+
+### Class Adjustment
+
+```{r}
+# This section filters out the A and I CustomerClass because they do not have any contributing kWh
+filter_class <- c("A", "I")
+
+df_clean <- df_clean |>
+  filter(!CustomerClass %in% filter_class)
+```
+
+```{r}
+head(df_clean)
+```
+
+## Modeling
+
+### Tsibble Creation
+
+```{r}
+# This groups the date and region with the customer class C and R
+# Afterwards, it creates the date column for creating a TSIBBLE
+df_clean1 <- df_clean |>
+  group_by(region, Year, Month, CustomerClass) |>
+  summarize(
+    total_count = sum(TotalkWh, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    Date = yearmonth(paste(Year, Month, "1", sep = "-"))
+  )
+
+# This data frame contains only the R CustomerClass
+df_r <- df_clean1 |>
+  filter(!CustomerClass %in% c("R"))
+
+# This data frame contains only the C CustomerClass
+df_c <- df_clean1 |>
+  filter(!CustomerClass %in% c("C"))
+
+# Create Tsibble for R and C
+df_r_tsibble <- df_r |>
+  as_tsibble(
+    index = Date,
+    key = region
+  ) |>
+  fill_gaps(total_count = 0)
+
+df_c_tsibble <- df_c |>
+  as_tsibble(
+    index = Date,
+    key = region
+  )
+
+# This section combines the C and R CustomerClass
+df_combined <- df_clean |>
+  group_by(region, Year, Month) |>
+  summarize(
+    total_count = sum(TotalkWh, na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  mutate(
+    Date = yearmonth(paste(Year, Month, "1", sep = "-"))
+  )
+
+df_combined_tsibble <- df_combined |>
+  as_tsibble(
+    index = Date,
+    key = region
+  ) |>
+  fill_gaps(total_count = 0)
+```
+
+### Modeling and Validation for R CustomerClass
+
+```{r}
+# This section creates models for the R CustomerClass and Forecasts 12 months
+trn_cutoff <- yearmonth(df_r_tsibble$Date |>
+                          max() |>
+                          as_date() - years(1))
+
+df_r_trn <- df_r_tsibble |>
+  filter(Date <= trn_cutoff)
+
+df_r_trn_fit <- df_r_trn |>
+  model(
+    tslm_logv = TSLM(log(total_count) ~ trend()),
+    tslm_log1p = TSLM(log1p(total_count) ~ trend()),
+    tslm_sqrt = TSLM(sqrt(total_count) ~ trend()),
+    tslm_v = TSLM(total_count ~ trend()),
+    arima = ARIMA(total_count),
+    ets = ETS(total_count)
+  )
+
+df_r_trn_fc <- df_r_trn_fit |>
+  forecast(h = "1 year")
+
+df_r_trn_fc |>
+  accuracy(df_r_tsibble) |>
+  arrange(RMSE) |>
+  gt() |>
+  fmt_number(decimals = 1)
+```
+
+### Modeling and Validation for C CustomerClass
+
+```{r}
+# This section creates models for the C CustomerClass and Forecasts 12 months
+trn_cutoff <- yearmonth(df_c_tsibble$Date |>
+                          max() |>
+                          as_date() - years(1))
+
+df_c_trn <- df_c_tsibble |>
+  filter(Date <= trn_cutoff)
+
+df_c_trn_fit <- df_c_trn |>
+  model(
+    tslm_logv = TSLM(log(total_count) ~ trend()),
+    tslm_log1p = TSLM(log1p(total_count) ~ trend()),
+    tslm_sqrt = TSLM(sqrt(total_count) ~ trend()),
+    tslm_v = TSLM(total_count ~ trend()),
+    arima = ARIMA(total_count),
+    ets = ETS(total_count)
+  )
+
+df_c_trn_fc <- df_c_trn_fit |>
+  forecast(h = "1 year")
+
+df_c_trn_fc |>
+  accuracy(df_c_tsibble) |>
+  arrange(RMSE) |>
+  gt() |>
+  fmt_number(decimals = 1)
+```
+
+### Modeling and Validation for Combined CustomerClass (C and R)
+
+```{r}
+# This section creates models for the combined C and R CustomerClass and Forecasts 12 months
+trn_cutoff <- yearmonth(df_combined_tsibble$Date |>
+                          max() |>
+                          as_date() - years(1))
+
+df_combined_trn <- df_combined_tsibble |>
+  filter(Date <= trn_cutoff)
+
+df_combined_trn_fit <- df_combined_trn |>
+  model(
+    tslm_logv = TSLM(log(total_count) ~ trend()),
+    tslm_log1p = TSLM(log1p(total_count) ~ trend()),
+    tslm_sqrt = TSLM(sqrt(total_count) ~ trend()),
+    tslm_v = TSLM(total_count ~ trend()),
+    arima = ARIMA(total_count),
+    ets = ETS(total_count)
+  )
+
+df_combined_trn_fc <- df_combined_trn_fit |>
+  forecast(h = "1 year")
+
+df_combined_trn_fc |>
+  accuracy(df_combined_tsibble) |>
+  arrange(RMSE) |>
+  gt() |>
+  fmt_number(decimals = 1)
+```
