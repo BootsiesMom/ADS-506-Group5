@@ -1,0 +1,598 @@
+---
+title: "Final Project"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*.
+
+```{r}
+# Install any missing ones first:
+# install.packages(c("readxl", "dplyr", "lubridate", "ggplot2",
+#                    "zoo", "zipcodeR", "tsibble", "fable", "feasts"))
+
+library(readxl)
+library(dplyr)
+library(lubridate)
+library(ggplot2)
+library(zoo)
+library(zipcodeR)
+library(tsibble)
+library(fable)
+library(feasts)
+```
+
+```{r}
+#Load Data & Focus on Residential
+df <- read_excel("/Users/roli/Desktop/SDGE-ELEC-2022to2025.xlsx")
+
+# 1.2 Basic structure
+glimpse(df)
+
+# 1.3 Residential subset + date variable
+df_res <- df %>%
+  filter(CustomerClass == "R") %>%
+  mutate(
+    ZipCode = as.character(ZipCode),
+    date    = make_date(Year, Month, 1)
+  ) %>%
+  arrange(ZipCode, date)
+```
+
+```{r}
+# Initial EDA
+summary(select(df_res, TotalCustomers, TotalkWh, AveragekWh))
+
+# Zeros and negatives
+sum(df_res$TotalCustomers == 0 & df_res$TotalkWh == 0)
+sum(df_res$TotalkWh < 0)
+
+# Total residential kWh over time (all ZIPs combined)
+df_res_total <- df_res %>%
+  group_by(date) %>%
+  summarise(TotalkWh = sum(TotalkWh, na.rm = TRUE), .groups = "drop")
+
+ggplot(df_res_total, aes(x = date, y = TotalkWh)) +
+  geom_line() +
+  labs(
+    title = "Total Residential kWh Over Time (All ZIP Codes)",
+    x = "Month", y = "Total kWh"
+  )
+
+# Distribution of mean monthly kWh by ZIP
+df_res_zip_mean <- df_res %>%
+  group_by(ZipCode) %>%
+  summarise(mean_kWh = mean(TotalkWh, na.rm = TRUE), .groups = "drop")
+
+ggplot(df_res_zip_mean, aes(x = mean_kWh)) +
+  geom_histogram(bins = 30) +
+  labs(
+    title = "Distribution of Mean Monthly Residential kWh by ZIP",
+    x = "Mean Monthly kWh", y = "Number of ZIP Codes"
+  )
+
+```
+
+```{r}
+#Cleaning
+#Drop rows with TotalCustomers = 0 & TotalkWh = 0
+#Flag/handle negative kWh
+df_res_clean <- df_res %>%
+  # Drop zero-customer, zero-usage rows
+  filter(!(TotalCustomers == 0 & TotalkWh == 0)) %>%
+  # Handle negative TotalkWh
+  mutate(
+    neg_kwh_flag = TotalkWh < 0,
+    TotalkWh = ifelse(TotalkWh < 0, NA_real_, TotalkWh),
+    AveragekWh = ifelse(TotalCustomers > 0 & !is.na(TotalkWh),
+                        TotalkWh / TotalCustomers,
+                        NA_real_)
+  )
+
+```
+
+```{r}
+#Automated clustering into 4 regions (South / Central / North / East)
+#Get ZIP centroids (lat/lon) using zipcodeR
+#Unique ZIPs in cleaned Residential data
+zip_vec <- unique(df_res_clean$ZipCode)
+
+# Get coordinates; reverse_zipcode returns data frame with lat/lng
+zip_coords_raw <- reverse_zipcode(zip_vec)
+
+# Keep only needed fields
+zip_coords <- zip_coords_raw %>%
+  select(zipcode, lat, lng) %>%
+  rename(ZipCode = zipcode) %>%
+  mutate(ZipCode = as.character(ZipCode)) %>%
+  filter(!is.na(lat), !is.na(lng))
+
+```
+
+```{r}
+#K-means clustering into 4 spatial clusters
+set.seed(123)  # for reproducibility
+
+kmod <- kmeans(zip_coords[, c("lat", "lng")], centers = 4)
+
+zip_clusters <- zip_coords %>%
+  mutate(cluster = kmod$cluster) %>%
+  # Map cluster IDs to Region labels
+  mutate(
+    Region = dplyr::recode(
+      cluster,
+      `1` = "Central",
+      `2` = "South",
+      `3` = "North",
+      `4` = "East"
+    )
+  )
+#south-central
+```
+
+```{r}
+#Attach Regions to Residential data & aggregate
+df_res_region <- df_res_clean %>%
+  left_join(zip_clusters %>% select(ZipCode, Region), by = "ZipCode") %>%
+  filter(!is.na(Region)) %>%     # drop ZIPs without a region match
+  group_by(Region, date, Year, Month) %>%
+  summarise(
+    TotalCustomers = sum(TotalCustomers, na.rm = TRUE),
+    TotalkWh       = sum(TotalkWh,       na.rm = TRUE),
+    # County-level / region-level average kWh per customer
+    AveragekWh     = ifelse(TotalCustomers > 0,
+                            TotalkWh / TotalCustomers,
+                            NA_real_),
+    .groups = "drop"
+  ) %>%
+  arrange(Region, date)
+
+```
+
+```{r}
+#Region Map (ZIP locations colored by Region)
+ggplot(zip_clusters, aes(x = lng, y = lat, color = Region)) +
+  geom_point(alpha = 0.8) +
+  coord_equal() +
+  labs(
+    title = "ZIP Codes Clustered into 4 Regions",
+    x = "Longitude", y = "Latitude", color = "Region"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+#Total kWh over time, faceted by Region
+ggplot(df_res_region, aes(x = date, y = TotalkWh, color = Region)) +
+  geom_line() +
+  facet_wrap(~ Region, scales = "free_y") +
+  labs(
+    title = "Total Residential kWh Over Time by Region",
+    x = "Month", y = "Total kWh"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+#kWh per customer over time, faceted by Region
+df_res_region <- df_res_region %>%
+  mutate(
+    kWh_per_customer = ifelse(TotalCustomers > 0,
+                              TotalkWh / TotalCustomers,
+                              NA_real_)
+  )
+
+ggplot(df_res_region, aes(x = date, y = kWh_per_customer, color = Region)) +
+  geom_line() +
+  facet_wrap(~ Region, scales = "free_y") +
+  labs(
+    title = "Average Residential kWh per Customer by Region",
+    x = "Month", y = "kWh per Customer"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+
+```
+
+```{r}
+#Transformations, smoothing, and differencing (per Region)
+df_res_region <- df_res_region %>%
+  mutate(
+    # Log-transform (for modeling)
+    log_kWh    = ifelse(TotalkWh > 0, log(TotalkWh), NA_real_),
+    log_kWh_pc = ifelse(kWh_per_customer > 0, log(kWh_per_customer), NA_real_)
+  ) %>%
+  group_by(Region) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(
+    # Simple moving averages (3- and 6-month)
+    kWh_ma3 = zoo::rollmean(TotalkWh, k = 3, fill = NA, align = "right"),
+    kWh_ma6 = zoo::rollmean(TotalkWh, k = 6, fill = NA, align = "right"),
+    # First difference of log kWh
+    d_log_kWh  = log_kWh - lag(log_kWh),
+    d2_log_kWh = d_log_kWh - lag(d_log_kWh)
+  ) %>%
+  ungroup()
+
+example_region <- unique(df_res_region$Region)[1]
+
+df_res_region %>%
+  filter(Region == example_region) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = TotalkWh), alpha = 0.4) +
+  geom_line(aes(y = kWh_ma3)) +
+  labs(
+    title = paste("Total kWh and 3-Month Moving Average –", example_region),
+    x = "Month", y = "Total kWh"
+  ) +
+  theme_minimal()
+
+```
+
+```{r}
+#Ready to model object: tsibble
+ts_res_region <- df_res_region %>%
+  as_tsibble(key = Region, index = date)
+
+ts_res_region
+
+```
+
+```{r}
+#Check for gaps
+ts_res_region %>%
+  count_gaps()
+
+```
+```{r}
+#Create a gap filled version for modeling
+ts_res_region_filled <- ts_res_region %>%
+  fill_gaps()   # makes missing Region–month combinations explicit (with NA values)
+
+ts_res_region_filled
+```
+```{r}
+fit_region <- ts_res_region_filled %>%
+  model(
+    ARIMA = ARIMA(log_kWh),
+    ETS   = ETS(log_kWh),
+    TSLM  = TSLM(log_kWh ~ trend() + season())
+  )
+
+fit_region
+```
+```{r}
+# 1. Model fit statistics (AIC, AICc, BIC)
+model_stats <- fit_region %>%
+  glance()
+
+model_stats %>%
+  select(Region, .model, AIC, AICc, BIC)
+
+# 2. Accuracy statistics (RMSE, MAE, MAPE, etc.)
+accuracy_stats <- fit_region %>%
+  accuracy()
+
+accuracy_stats %>%
+  select(Region, .model, RMSE, MAE, MAPE)
+
+```
+```{r}
+library(zoo)
+
+# Create a modeling version of the region-level data
+df_res_region_mdl <- df_res_region %>%
+  group_by(Region) %>%
+  arrange(date, .by_group = TRUE) %>%
+  mutate(
+    # Step 1: interpolate internal gaps
+    TotalkWh_imputed = na.approx(TotalkWh, na.rm = FALSE),
+
+    # Step 2: carry values forward/backward for leading/trailing NAs
+    TotalkWh_imputed = na.locf(TotalkWh_imputed, na.rm = FALSE),
+    TotalkWh_imputed = na.locf(TotalkWh_imputed, fromLast = TRUE, na.rm = FALSE),
+
+    # Step 3: safety fallback – if still NA, use original value
+    TotalkWh_imputed = ifelse(is.na(TotalkWh_imputed),
+                              TotalkWh,
+                              TotalkWh_imputed),
+
+    # Modeling variable: log of imputed TotalkWh
+    log_kWh = log(TotalkWh_imputed)
+  ) %>%
+  ungroup()
+
+# Check: there should be 0 missing log_kWh per region
+df_res_region_mdl %>%
+  group_by(Region) %>%
+  summarise(n_missing = sum(is.na(log_kWh)), .groups = "drop")
+
+```
+```{r}
+# Rebuild the tsibble from the *modeling* data
+ts_res_region <- df_res_region_mdl %>%
+  as_tsibble(key = Region, index = date) %>%
+  fill_gaps()   # ensure regular monthly spacing per region
+
+# Double-check: no NAs left in log_kWh
+ts_res_region %>%
+  group_by_key() %>%
+  summarise(n_missing = sum(is.na(log_kWh)))
+
+```
+```{r}
+
+# Now fit ARIMA, ETS, and TSLM
+# Fit ARIMA, ETS, and TSLM on log_kWh for each Region
+fit_region <- ts_res_region %>%
+  model(
+    ARIMA = ARIMA(log_kWh),
+    ETS   = ETS(log_kWh),
+    TSLM  = TSLM(log_kWh ~ trend() + season())
+  )
+
+fit_region
+
+```
+```{r}
+#Check that there are NAs in log_kWh (just to see it)
+ts_res_region %>%
+  group_by_key() %>%
+  summarise(n_missing = sum(is.na(log_kWh)), .groups = "drop")
+
+```
+```{r}
+#Impute missing log_kWh directly on the tsibble
+library(forecast)  # if not already loaded
+
+ts_res_region <- ts_res_region %>%
+  group_by_key() %>%
+  mutate(
+    log_kWh = na.interp(log_kWh)   # interpolate NAs in log_kWh
+  ) %>%
+  ungroup()
+
+# Check again: should now be all zeros
+ts_res_region %>%
+  group_by_key() %>%
+  summarise(n_missing = sum(is.na(log_kWh)), .groups = "drop")
+
+```
+```{r}
+#Refit ARIMA, ETS, and TSLM
+fit_region <- ts_res_region %>%
+  model(
+    ARIMA = ARIMA(log_kWh),
+    ETS   = ETS(log_kWh),
+    TSLM  = TSLM(log_kWh ~ trend() + season())
+  )
+
+fit_region
+
+```
+```{r}
+#Compare and forecast
+fit_region_forced <- ts_res_region %>%
+  model(
+    ARIMA_manual = ARIMA(log_kWh ~ pdq(0,1,1) + PDQ(0,1,1)),
+    ETS         = ETS(log_kWh),
+    TSLM        = TSLM(log_kWh ~ trend() + season())
+  )
+
+```
+```{r}
+# Model fit stats
+model_stats <- fit_region %>% glance()
+model_stats %>% select(Region, .model, AIC, AICc, BIC)
+
+# Accuracy
+accuracy_stats <- fit_region %>% accuracy()
+accuracy_stats %>% select(Region, .model, RMSE, MAE, MAPE)
+
+# Forecast 12 months
+fc_region <- fit_region %>%
+  forecast(h = "12 months")
+
+```
+```{r}
+# Create augmented data with fitted values for each model/region
+aug_region <- fit_region %>%
+  augment()
+
+head(aug_region)
+
+```
+
+
+```{r}
+plot_df <- aug_region %>%
+  select(Region, date, log_kWh, .fitted, .model) %>%
+  mutate(Observed = log_kWh) %>%
+  tidyr::pivot_longer(
+    cols = c(.fitted, Observed),
+    names_to = "Type",
+    values_to = "Value"
+  ) %>%
+  mutate(
+    LineGroup = ifelse(Type == "Observed", "Observed", .model)
+  )
+```
+
+
+```{r}
+#Plot
+ggplot(plot_df, aes(x = date, y = Value, color = LineGroup)) +
+  geom_line(size = 0.7) +
+  facet_wrap(~ Region, scales = "free_x") +
+  labs(
+    title = "Observed vs Fitted log(Total kWh) by Region and Model",
+    x = "Month",
+    y = "log(Total kWh)",
+    color = "Series"
+  ) +
+  scale_color_manual(
+    values = c(
+      "Observed" = "black",
+      "ARIMA"    = "red",
+      "ETS"      = "green4",
+      "TSLM"     = "purple"
+    )
+  ) +
+  theme_minimal()
+#ARIMA and ETS are not missing, they're hiding as all three models are giving almost the same fitted values
+```
+
+```{r}
+aug_region %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = log_kWh, color = "Observed"), linewidth = 0.7) +
+  geom_line(aes(y = .fitted, color = .model), linewidth = 0.7) +
+  facet_grid(Region ~ .model) +
+  labs(title = "Observed vs Fitted log(Total kWh) by Region and Model",
+       x = "Month", y = "log(Total kWh)", color = "Series") +
+  theme_minimal()
+#Facet by model - plot where all three fitted lines are more obviously visible
+```
+
+```{r}
+#Log scale forecasts
+autoplot(fc_region, ts_res_region) +
+  labs(
+    title = "12-Month Forecasts of log(Total kWh) by Region and Model",
+    x = "Month",
+    y = "log(Total kWh)"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+# 1. Forecast the next 12 months from each model
+fc_region <- fit_region %>%
+  forecast(h = "12 months")
+
+# 2. Back-transform point forecasts from log_kWh to kWh
+fc_region_kWh <- fc_region %>%
+  mutate(.mean_kWh = exp(.mean))
+
+# Optional: quick check
+head(fc_region_kWh)
+
+```
+
+
+```{r}
+#Back-transform point forecasts to kWh
+ggplot() +
+  geom_line(data = ts_res_region,
+            aes(x = date, y = TotalkWh,
+                color = "Observed", linetype = "Observed"),
+            linewidth = 0.7) +
+  geom_line(data = fc_region_kWh,
+            aes(x = date, y = .mean_kWh,
+                color = .model, linetype = .model),
+            linewidth = 0.7) +
+  facet_wrap(~ Region, scales = "free_y") +
+  labs(
+    title = "Observed and Forecasted Total kWh by Region",
+    x = "Month",
+    y = "Total kWh",
+    color = "Series / Model",
+    linetype = "Series / Model"
+  ) +
+  scale_color_manual(values = c(
+    "Observed" = "black",
+    "ARIMA"    = "red",
+    "ETS"      = "darkgreen",
+    "TSLM"     = "purple"
+  )) +
+  theme_minimal()
+```
+```{r}
+#Residual Diagnostics
+fit_region %>%
+  filter(Region == "Central") %>%
+  select(ARIMA) %>%
+  gg_tsresiduals()
+
+```
+
+```{r}
+#Residual Diagnostics
+fit_region %>% filter(Region == "East")   %>% select(ARIMA) %>% gg_tsresiduals()
+fit_region %>% filter(Region == "North")  %>% select(ARIMA) %>% gg_tsresiduals()
+fit_region %>% filter(Region == "South")  %>% select(ARIMA) %>% gg_tsresiduals()
+```
+```{r}
+#Residual Whiteness test (numeric summary)
+fit_region %>%
+  augment() %>%
+  features(.innov, ljung_box, lag = 12, dof = 3)
+```
+```{r}
+#Seasonal Plot
+library(feasts)
+
+ts_res_region %>%
+  gg_season(log_kWh) +
+  facet_wrap(~ Region, scales = "free_y") +
+  labs(
+    title = "Seasonal Plot of log(Total kWh) by Region",
+    x = "Month",
+    y = "log(Total kWh)"
+  )
+```
+```{r}
+#Classical Decomposition (Trend, Seasonal, Remainder)
+ts_res_region %>%
+  model(STL = STL(log_kWh ~ season(window = "periodic"))) %>%
+  components() %>%
+  autoplot() +
+  labs(
+    title = "STL Decomposition of log(Total kWh)",
+    x = "Month",
+    y = ""
+  )
+```
+```{r}
+#ACF & PACF
+ts_res_region %>%
+  ACF(log_kWh) %>%
+  autoplot() +
+  facet_wrap(~ Region) +
+  labs(title = "ACF of log(Total kWh)")
+```
+```{r}
+#Forecast Interval Plot
+fc_region %>%
+  autoplot(ts_res_region, level = c(80, 95)) +
+  labs(
+    title = "Forecast with 80% and 95% Confidence Intervals",
+    x = "Month",
+    y = "log(Total kWh)"
+  ) +
+  facet_wrap(~ Region)
+```
+```{r}
+#Rolling Average / Smoothed Trend Plot
+ts_res_region %>%
+  mutate(
+    ma_6 = slider::slide_dbl(log_kWh, mean, .before = 5, .complete = FALSE)
+  ) %>%
+  ggplot(aes(x = date)) +
+  geom_line(aes(y = log_kWh), alpha = 0.4) +
+  geom_line(aes(y = ma_6), color = "blue", linewidth = 1) +
+  facet_wrap(~ Region) +
+  labs(
+    title = "6-Month Moving Average of log(Total kWh)",
+    x = "Month", y = "log(Total kWh)"
+  ) +
+  theme_minimal()
+
+```
+
