@@ -1,0 +1,136 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code. 
+
+Try executing this chunk by clicking the *Run* button within the chunk or by placing your cursor inside it and pressing *Cmd+Shift+Enter*. 
+
+```{r}
+# ===============================
+# SDG&E ETS Models: Auto vs Manual
+# Using SDGE-ELEC-2022to2025.xlsx
+# ===============================
+
+# 1) Packages -------------------------------------------------------------
+suppressPackageStartupMessages({
+  library(tidyverse)
+  library(lubridate)
+  library(readxl)
+  library(fpp3)    # tsibble, feasts, fable, fabletools
+})
+
+# 2) Load and prep data ---------------------------------------------------
+data_path <- "/Users/roli/Desktop/SDGE-ELEC-2022to2025.xlsx"   # <-- put file in your working dir or use full path
+raw <- read_excel(data_path)
+
+# We assume columns: ZipCode, Month, Year, CustomerClass, TotalCustomers, TotalkWh
+df <- raw %>%
+  transmute(
+    ZipCode        = as.character(ZipCode),
+    CustomerClass  = as.character(CustomerClass),
+    Year           = as.integer(Year),
+    Month          = as.integer(Month),
+    TotalCustomers = as.numeric(TotalCustomers),
+    TotalkWh       = as.numeric(TotalkWh),
+    ym             = yearmonth(ymd(paste(Year, Month, 1)))
+  ) %>%
+  # keep only months with actual customers and usage
+  filter(TotalCustomers > 0, TotalkWh > 0)
+
+# Aggregate in case there are multiple rows per (ZIP, Class, month)
+monthly <- df %>%
+  group_by(ZipCode, CustomerClass, ym) %>%
+  summarise(kwh = sum(TotalkWh, na.rm = TRUE), .groups = "drop") %>%
+  as_tsibble(key = c(ZipCode, CustomerClass), index = ym)
+
+# 3) Choose a series to model (longest ZIP x Class) -----------------------
+series_stats <- monthly %>%
+  group_by_key() %>%
+  summarise(
+    n_months = n(),
+    start    = min(ym),
+    end      = max(ym),
+    .groups  = "drop"
+  ) %>%
+  arrange(desc(n_months))
+
+# Take the longest series
+sel <- series_stats %>% slice(1)
+sel_zip   <- sel$ZipCode[[1]]
+sel_class <- sel$CustomerClass[[1]]
+message("Selected series -> ZIP: ", sel_zip, " | Class: ", sel_class)
+
+series <- monthly %>%
+  filter(ZipCode == sel_zip, CustomerClass == sel_class) %>%
+  arrange(ym)
+
+n_total <- nrow(series)
+if (n_total < 12) stop("Series is too short; need at least 12 months.")
+
+# 4) Train / Test split ---------------------------------------------------
+# Hold out last 12 months (or 25% if shorter)
+h_test <- min(12L, max(1L, floor(n_total / 4)))
+
+split_point <- max(series$ym) - h_test
+train <- series %>% filter(ym <= split_point)
+test  <- series %>% filter(ym >  split_point)
+
+cat("Obs -> total:", n_total,
+    "| train:", nrow(train),
+    "| test:",  nrow(test), "\n")
+
+# 5) Fit Auto ETS and Manual ETS ------------------------------------------
+# Auto-selected ETS
+fit_auto <- train %>%
+  model(AutoETS = ETS(kwh))
+
+# Manual ETS: simple exponential smoothing ETS(A,N,N)
+fit_manual <- train %>%
+  model(ManualETS = ETS(kwh ~ error("A") + trend("N") + season("N")))
+
+report(fit_auto)
+report(fit_manual)
+
+# 6) Forecast on the test horizon ----------------------------------------
+h <- nrow(test)
+fc_auto   <- fit_auto %>% forecast(h = h)
+fc_manual <- fit_manual %>% forecast(h = h)
+
+# Optional: compare accuracy
+acc_auto   <- accuracy(fc_auto, test) %>% mutate(Model = "AutoETS")
+acc_manual <- accuracy(fc_manual, test) %>% mutate(Model = "ManualETS")
+bind_rows(acc_auto, acc_manual)
+
+# 7) Time series plots ----------------------------------------------------
+# PLOT 1: Auto ETS forecast
+autoplot(series, kwh) +
+  autolayer(fc_auto, level = 90) +
+  labs(
+    title    = paste0("Auto ETS Forecast | ZIP ", sel_zip, " | Class ", sel_class),
+    subtitle = "Auto-selected ETS model",
+    x = "Month",
+    y = "kWh"
+  ) +
+  theme_minimal()
+
+# PLOT 2: Manual ETS forecast
+autoplot(series, kwh) +
+  autolayer(fc_manual, level = 90) +
+  labs(
+    title    = paste0("Manual ETS(A,N,N) Forecast | ZIP ", sel_zip, " | Class ", sel_class),
+    subtitle = "Manual ETS model with additive error, no trend, no seasonality",
+    x = "Month",
+    y = "kWh"
+  ) +
+  theme_minimal()
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Cmd+Option+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Cmd+Shift+K* to preview the HTML file). 
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
+
