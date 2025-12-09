@@ -23,6 +23,7 @@ library(zipcodeR)
 library(tsibble)
 library(fable)
 library(feasts)
+library(scales)
 ```
 
 ```{r}
@@ -596,3 +597,51 @@ ts_res_region %>%
 
 ```
 
+#Additional EDA:
+#Which Months Peak?
+
+df_res_region %>%
+  group_by(Region, Month) %>%
+  summarise(total_kWh = sum(TotalkWh, na.rm = TRUE), .groups = "drop") %>%
+  mutate(Month = factor(Month, levels = 1:12,
+                        labels = month.abb)) %>%
+  ggplot(aes(Month, total_kWh, fill = Region)) +
+  geom_col(position = "dodge") +
+  labs(title = "Which Months Peak? (Residential, 2022–2025)",
+       x = "Month", y = "Total kWh (sum across 2022-2025)") +
+  theme_minimal()
+
+```
+#Peak-Month Load by Region
+# 1) Compute each Region's PEAK month (max total kWh across months)
+peak_per_region <- df_res_region %>%
+  group_by(Region, Month) %>%
+  summarise(total_kWh = sum(TotalkWh, na.rm = TRUE), .groups = "drop_last") %>%
+  slice_max(order_by = total_kWh, n = 1, with_ties = FALSE) %>%
+  ungroup() %>%
+  mutate(Month = factor(Month, levels = 1:12, labels = month.abb))
+
+# 2) County median of regional peaks (for the dashed reference line)
+county_median_peak <- median(peak_per_region$total_kWh, na.rm = TRUE)
+
+# 3) Plot: sorted bars + dashed county-median line
+library(scales)
+
+# sorted bars + dashed county-median line (with modern labels)
+ggplot(peak_per_region,
+       aes(x = reorder(Region, total_kWh), y = total_kWh)) +
+  geom_col(width = 0.72) +
+  geom_hline(yintercept = county_median_peak, linetype = 2) +
+  annotate("text",
+           x = Inf, y = county_median_peak,
+           vjust = -0.5, hjust = 1.02,
+           label = "County median peak",
+           size = 3.4) +
+  coord_flip() +
+  labs(title = "Peak-Month Load by Region (Residential, 2022-2025)",
+       subtitle = "Dashed line = county median of regional peaks",
+       x = "Region", y = "Peak-Month Total kWh") +
+  scale_y_continuous(labels = label_number(scale_cut = cut_short_scale())) +
+  theme_minimal(base_size = 13)
+
+```
