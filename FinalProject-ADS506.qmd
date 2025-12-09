@@ -1,8 +1,7 @@
 ---
 title: "Final Project"
-output:
-  pdf_document: default
-  html_notebook: default
+format: 
+  docx: default
 ---
 
 This is an [R Markdown](http://rmarkdown.rstudio.com) Notebook. When you execute code within the notebook, the results appear beneath the code.
@@ -28,7 +27,7 @@ library(scales)
 
 ```{r}
 #Load Data & Focus on Residential
-df <- read_excel("/Users/roli/Desktop/SDGE-ELEC-2022to2025.xlsx")
+df <- read_excel("SDGE-ELEC-2022to2025.xlsx")
 
 # 1.2 Basic structure
 glimpse(df)
@@ -599,7 +598,7 @@ ts_res_region %>%
 
 #Additional EDA:
 #Which Months Peak?
-
+```{r}
 df_res_region %>%
   group_by(Region, Month) %>%
   summarise(total_kWh = sum(TotalkWh, na.rm = TRUE), .groups = "drop") %>%
@@ -610,8 +609,9 @@ df_res_region %>%
   labs(title = "Which Months Peak? (Residential, 2022–2025)",
        x = "Month", y = "Total kWh (sum across 2022-2025)") +
   theme_minimal()
-
 ```
+
+```{r}
 #Peak-Month Load by Region
 # 1) Compute each Region's PEAK month (max total kWh across months)
 peak_per_region <- df_res_region %>%
